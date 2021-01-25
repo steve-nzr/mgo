@@ -545,7 +545,7 @@ func (s *S) TestFindRef(c *C) {
 	c.Assert(result.N, Equals, 3)
 
 	f := func() { session.FindRef(ref1).One(&result) }
-	c.Assert(f, PanicMatches, "Can't resolve database for &mgo.DBRef{Collection:\"col1\", Id:1, database:\"\"}")
+	c.Assert(f, PanicMatches, "Can't resolve database for &mgo.DBRef{Collection:\"col1\", Id:1, Database:\"\"}")
 }
 
 func (s *S) TestDatabaseAndCollectionNames(c *C) {
