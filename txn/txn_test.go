@@ -21,9 +21,9 @@ func TestAll(t *testing.T) {
 type S struct {
 	server   dbtest.DBServer
 	session  *mgo.Session
-	db       *mgo.database
-	tc, sc   *mgo.collectionImpl
-	accounts *mgo.collectionImpl
+	db       mgo.Database
+	tc, sc   mgo.Collection
+	accounts mgo.Collection
 	runner   *txn.Runner
 }
 
