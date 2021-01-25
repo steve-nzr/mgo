@@ -220,10 +220,10 @@ const (
 // A Runner applies operations as part of a transaction onto any number
 // of collections within a database. See the Run method for details.
 type Runner struct {
-	tc   *mgo.collectionImpl // txns
-	sc   *mgo.collectionImpl // stash
-	lc   *mgo.collectionImpl // log
-	opts RunnerOptions       // runtime options
+	tc   mgo.Collection // txns
+	sc   mgo.Collection // stash
+	lc   mgo.Collection // log
+	opts RunnerOptions  // runtime options
 }
 
 const defaultMaxTxnQueueLength = 1000
@@ -238,10 +238,10 @@ const defaultMaxTxnQueueLength = 1000
 // A second collection with the same name of tc but suffixed by ".stash"
 // will be used for implementing the transactional behavior of insert
 // and remove operations.
-func NewRunner(tc *mgo.collectionImpl) *Runner {
+func NewRunner(tc mgo.Collection) *Runner {
 	return &Runner{
 		tc:   tc,
-		sc:   tc.Database.C(tc.Name + ".stash"),
+		sc:   tc.Database().C(tc.Name() + ".stash"),
 		lc:   nil,
 		opts: DefaultRunnerOptions(),
 	}
@@ -406,7 +406,7 @@ func (r *Runner) Resume(id bson.ObjectId) (err error) {
 // was not present in the collection. Revisions will not change when
 // updates or removes are applied to missing documents or inserts are
 // attempted when the document isn't present.
-func (r *Runner) ChangeLog(logc *mgo.collectionImpl) {
+func (r *Runner) ChangeLog(logc mgo.Collection) {
 	r.lc = logc
 }
 
@@ -430,7 +430,7 @@ func (r *Runner) PurgeMissing(collections ...string) error {
 
 	sort.Strings(collections)
 	for _, collection := range collections {
-		c := r.tc.Database.C(collection)
+		c := r.tc.Database().C(collection)
 		iter := c.Find(nil).Select(bson.M{"_id": 1, "txn-queue": 1}).Iter()
 		var tdoc TDoc
 		for iter.Next(&tdoc) {

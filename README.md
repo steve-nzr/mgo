@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.org/globalsign/mgo.svg?branch=master)](https://travis-ci.org/globalsign/mgo) [![GoDoc](https://godoc.org/github.com/steve-nzr/mgo?status.svg)](https://godoc.org/github.com/steve-nzr/mgo)
+[![Build Status](https://travis-ci.org/steve-nzr/mgo.svg?branch=master)](https://travis-ci.org/steve-nzr/mgo) [![GoDoc](https://godoc.org/github.com/steve-nzr/mgo?status.svg)](https://godoc.org/github.com/steve-nzr/mgo)
 
 The MongoDB driver for Go
 -------------------------

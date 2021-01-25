@@ -294,7 +294,7 @@ NextDoc:
 			Update:    bson.D{{Name: "$addToSet", Value: bson.D{{Name: "txn-queue", Value: tt}}}},
 			ReturnNew: true,
 		}
-		c := f.tc.Database.C(dkey.C)
+		c := f.tc.Database().C(dkey.C)
 		cquery := c.FindId(dkey.Id).Select(txnFields)
 
 	RetryDoc:
@@ -467,7 +467,7 @@ func (f *flusher) rescan(t *transaction, force bool) (revnos []int64, err error)
 
 	RetryDoc:
 		retry++
-		c := f.tc.Database.C(dkey.C)
+		c := f.tc.Database().C(dkey.C)
 		if err := c.FindId(dkey.Id).Select(txnFields).One(&info); err == mgo.ErrNotFound {
 			// Document is missing. Look in stash.
 			chaos("")
@@ -664,7 +664,7 @@ func (f *flusher) assert(t *transaction, revnos []int64, pull map[bson.ObjectId]
 			}
 		}
 
-		c := f.tc.Database.C(op.C)
+		c := f.tc.Database().C(op.C)
 		if err := c.Find(qdoc).Select(bson.D{{Name: "_id", Value: 1}}).One(nil); err == mgo.ErrNotFound {
 			// Assertion failed or someone else started applying.
 			return f.abortOrReload(t, revnos, pull)
@@ -717,7 +717,7 @@ func (f *flusher) abortOrReload(t *transaction, revnos []int64, pull map[bson.Ob
 			if revnos[i] < 0 {
 				err = f.sc.UpdateId(dkey, udoc)
 			} else {
-				c := f.tc.Database.C(dkey.C)
+				c := f.tc.Database().C(dkey.C)
 				err = c.UpdateId(dkey.Id, udoc)
 			}
 			if err != nil && err != mgo.ErrNotFound {
@@ -787,7 +787,7 @@ func (f *flusher) apply(t *transaction, pull map[bson.ObjectId]*transaction) err
 			f.debugf("Applying %s op %d (%s) on %v with txn-revno %d", t, i, opName, dkey, revno)
 		}
 
-		c := f.tc.Database.C(op.C)
+		c := f.tc.Database().C(op.C)
 
 		qdoc := bson.D{{Name: "_id", Value: dkey.Id}, {Name: "txn-revno", Value: revno}, {Name: "txn-queue", Value: tt}}
 		if op.Insert != nil {

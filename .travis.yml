@@ -3,13 +3,17 @@ language: go
 go_import_path: github.com/steve-nzr/mgo
 
 go:
-    - 1.9.x
-    - 1.10.x
+    - 1.11.x
+    - 1.12.x
+    - 1.13.x
+    - 1.14.x
+    - 1.15.x
 
 env:
     global:
         - BUCKET=https://s3.eu-west-2.amazonaws.com/globalsign-mgo
         - FASTDL=https://fastdl.mongodb.org/linux
+        - GO111GO111MODULE=on
     matrix:
         - MONGODB=x86_64-ubuntu1404-3.0.15
         - MONGODB=x86_64-ubuntu1404-3.2.17
@@ -17,7 +21,6 @@ env:
         - MONGODB=x86_64-ubuntu1404-3.6.0
 
 install:
-
     - wget $FASTDL/mongodb-linux-$MONGODB.tgz
     - tar xzvf mongodb-linux-$MONGODB.tgz
     - export PATH=$PWD/mongodb-linux-$MONGODB/bin:$PATH
