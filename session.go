@@ -114,15 +114,9 @@ type Session struct {
 	dialInfo *DialInfo
 }
 
-// Database holds collections of documents
-//
-// Relevant documentation:
-//
-//    https://docs.mongodb.com/manual/core/databases-and-collections/#databases
-//
-type Database struct {
-	Session *Session
-	Name    string
+type database struct {
+	session *Session
+	name    string
 }
 
 // Collection stores documents
@@ -131,10 +125,10 @@ type Database struct {
 //
 //    https://docs.mongodb.com/manual/core/databases-and-collections/#collections
 //
-type Collection struct {
-	Database *Database
-	Name     string // "collection"
-	FullName string // "db.collection"
+type collectionImpl struct {
+	database *database
+	name     string // "collection"
+	fullName string // "db.collection"
 }
 
 // Query keeps info on the query.
@@ -895,19 +889,19 @@ func (s *Session) LiveServers() (addrs []string) {
 //
 // Creating this value is a very lightweight operation, and
 // involves no network communication.
-func (s *Session) DB(name string) *Database {
+func (s *Session) DB(name string) *database {
 	if name == "" {
 		name = s.defaultdb
 	}
-	return &Database{s, name}
+	return &database{s, name}
 }
 
 // C returns a value representing the named collection.
 //
 // Creating this value is a very lightweight operation, and
 // involves no network communication.
-func (db *Database) C(name string) *Collection {
-	return &Collection{db, name, db.Name + "." + name}
+func (db *database) C(name string) Collection {
+	return &collectionImpl{db, name, db.name + "." + name}
 }
 
 // CreateView creates a view as the result of the applying the specified
@@ -926,7 +920,7 @@ func (db *Database) C(name string) *Collection {
 //     https://docs.mongodb.com/manual/core/views/
 //     https://docs.mongodb.com/manual/reference/method/db.createView/
 //
-func (db *Database) CreateView(view string, source string, pipeline interface{}, collation *Collation) error {
+func (db *database) CreateView(view string, source string, pipeline interface{}, collation *Collation) error {
 	command := bson.D{{Name: "create", Value: view}, {Name: "viewOn", Value: source}, {Name: "pipeline", Value: pipeline}}
 	if collation != nil {
 		command = append(command, bson.DocElem{Name: "collation", Value: collation})
@@ -935,19 +929,39 @@ func (db *Database) CreateView(view string, source string, pipeline interface{},
 }
 
 // With returns a copy of db that uses session s.
-func (db *Database) With(s *Session) *Database {
+func (db *database) With(s *Session) Database {
 	newdb := *db
-	newdb.Session = s
+	newdb.session = s
 	return &newdb
 }
 
 // With returns a copy of c that uses session s.
-func (c *Collection) With(s *Session) *Collection {
-	newdb := *c.Database
-	newdb.Session = s
+func (c *collectionImpl) With(s *Session) Collection {
+	newdb := *c.database
+	newdb.session = s
 	newc := *c
-	newc.Database = &newdb
+	newc.database = &newdb
 	return &newc
+}
+
+func (c *collectionImpl) Database() Database {
+	return c.database
+}
+
+func (c *collectionImpl) Name() string {
+	return c.name
+}
+
+func (c *collectionImpl) FullName() string {
+	return c.fullName
+}
+
+func (db *database) Name() string {
+	return db.name
+}
+
+func (db *database) Session() *Session {
+	return db.session
 }
 
 // GridFS returns a GridFS value representing collections in db that
@@ -964,7 +978,7 @@ func (c *Collection) With(s *Session) *Collection {
 //     http://www.mongodb.org/display/DOCS/GridFS+Tools
 //     http://www.mongodb.org/display/DOCS/GridFS+Specification
 //
-func (db *Database) GridFS(prefix string) *GridFS {
+func (db *database) GridFS(prefix string) *GridFS {
 	return newGridFS(db, prefix)
 }
 
@@ -988,8 +1002,8 @@ func (db *Database) GridFS(prefix string) *GridFS {
 //     http://www.mongodb.org/display/DOCS/Commands
 //     http://www.mongodb.org/display/DOCS/List+of+Database+CommandSkips
 //
-func (db *Database) Run(cmd interface{}, result interface{}) error {
-	socket, err := db.Session.acquireSocket(true)
+func (db *database) Run(cmd interface{}, result interface{}) error {
+	socket, err := db.session.acquireSocket(true)
 	if err != nil {
 		return err
 	}
@@ -1002,7 +1016,7 @@ func (db *Database) Run(cmd interface{}, result interface{}) error {
 // runOnSocket does the same as Run, but guarantees that your command will be run
 // on the provided socket instance; if it's unhealthy, you will receive the error
 // from it.
-func (db *Database) runOnSocket(socket *mongoSocket, cmd interface{}, result interface{}) error {
+func (db *database) runOnSocket(socket *mongoSocket, cmd interface{}, result interface{}) error {
 	socket.Acquire()
 	defer socket.Release()
 	return db.run(socket, cmd, result)
@@ -1046,8 +1060,8 @@ type Credential struct {
 // authentication is valid for the whole session and will stay valid until
 // Logout is explicitly called for the same database, or the session is
 // closed.
-func (db *Database) Login(user, pass string) error {
-	return db.Session.Login(&Credential{Username: user, Password: pass, Source: db.Name})
+func (db *database) Login(user, pass string) error {
+	return db.session.Login(&Credential{Username: user, Password: pass, Source: db.Name()})
 }
 
 // Login authenticates with MongoDB using the provided credential.  The
@@ -1103,9 +1117,9 @@ func (s *Session) socketLogin(socket *mongoSocket) error {
 }
 
 // Logout removes any established authentication credentials for the database.
-func (db *Database) Logout() {
-	session := db.Session
-	dbname := db.Name
+func (db *database) Logout() {
+	session := db.Session()
+	dbname := db.Name()
 	session.m.Lock()
 	found := false
 	for i, cred := range session.creds {
@@ -1243,14 +1257,14 @@ const (
 //     http://docs.mongodb.org/manual/reference/user-privileges/
 //     http://docs.mongodb.org/manual/reference/privilege-documents/
 //
-func (db *Database) UpsertUser(user *User) error {
+func (db *database) UpsertUser(user *User) error {
 	if user.Username == "" {
 		return fmt.Errorf("user has no Username")
 	}
 	if (user.Password != "" || user.PasswordHash != "") && user.UserSource != "" {
 		return fmt.Errorf("user has both Password/PasswordHash and UserSource set")
 	}
-	if len(user.OtherDBRoles) > 0 && db.Name != "admin" && db.Name != "$external" {
+	if len(user.OtherDBRoles) > 0 && db.Name() != "admin" && db.Name() != "$external" {
 		return fmt.Errorf("user with OtherDBRoles is only supported in the admin or $external databases")
 	}
 
@@ -1258,7 +1272,7 @@ func (db *Database) UpsertUser(user *User) error {
 	rundb := db
 	if user.UserSource != "" {
 		// Compatibility logic for the userSource field of MongoDB <= 2.4.X
-		rundb = db.Session.DB(user.UserSource)
+		rundb = db.Session().DB(user.UserSource)
 	}
 	err := rundb.runUserCmd("updateUser", user)
 	// retry with createUser when isAuthError in order to enable the "localhost exception"
@@ -1326,7 +1340,7 @@ func isNotMasterError(err error) bool {
 	return ok && strings.Contains(e.Message, "not master")
 }
 
-func (db *Database) runUserCmd(cmdName string, user *User) error {
+func (db *database) runUserCmd(cmdName string, user *User) error {
 	cmd := make(bson.D, 0, 16)
 	cmd = append(cmd, bson.DocElem{Name: cmdName, Value: user.Username})
 	if user.Password != "" {
@@ -1345,7 +1359,7 @@ func (db *Database) runUserCmd(cmdName string, user *User) error {
 		cmd = append(cmd, bson.DocElem{Name: "roles", Value: roles})
 	}
 	err := db.Run(cmd, nil)
-	if !isNoCmd(err) && user.UserSource != "" && (user.UserSource != "$external" || db.Name != "$external") {
+	if !isNoCmd(err) && user.UserSource != "" && (user.UserSource != "$external" || db.Name() != "$external") {
 		return fmt.Errorf("MongoDB 2.6+ does not support the UserSource setting")
 	}
 	return err
@@ -1356,10 +1370,10 @@ func (db *Database) runUserCmd(cmdName string, user *User) error {
 //
 // WARNING: This method is obsolete and should only be used with MongoDB 2.2
 // or earlier. For MongoDB 2.4 and on, use UpsertUser instead.
-func (db *Database) AddUser(username, password string, readOnly bool) error {
+func (db *database) AddUser(username, password string, readOnly bool) error {
 	// Try to emulate the old behavior on 2.6+
 	user := &User{Username: username, Password: password}
-	if db.Name == "admin" {
+	if db.Name() == "admin" {
 		if readOnly {
 			user.Roles = []Role{RoleReadAny}
 		} else {
@@ -1390,7 +1404,7 @@ func (db *Database) AddUser(username, password string, readOnly bool) error {
 }
 
 // RemoveUser removes the authentication credentials of user from the database.
-func (db *Database) RemoveUser(user string) error {
+func (db *database) RemoveUser(user string) error {
 	err := db.Run(bson.D{{Name: "dropUser", Value: user}}, nil)
 	if isNoCmd(err) {
 		users := db.C("system.users")
@@ -1610,7 +1624,7 @@ func parseIndexKey(key []string) (*indexKeyInfo, error) {
 //     err := collection.EnsureIndex(mgo.Index{Key: []string{"a", "b"}})
 //
 // See the EnsureIndex method for more details.
-func (c *Collection) EnsureIndexKey(key ...string) error {
+func (c *collectionImpl) EnsureIndexKey(key ...string) error {
 	return c.EnsureIndex(Index{Key: key})
 }
 
@@ -1686,7 +1700,7 @@ func (c *Collection) EnsureIndexKey(key ...string) error {
 //     http://www.mongodb.org/display/DOCS/Geospatial+Indexing
 //     http://www.mongodb.org/display/DOCS/Multikeys
 //
-func (c *Collection) EnsureIndex(index Index) error {
+func (c *collectionImpl) EnsureIndex(index Index) error {
 	if index.Sparse && index.PartialFilter != nil {
 		return errors.New("cannot mix sparse and partial indexes")
 	}
@@ -1696,15 +1710,15 @@ func (c *Collection) EnsureIndex(index Index) error {
 		return err
 	}
 
-	session := c.Database.Session
-	cacheKey := c.FullName + "\x00" + keyInfo.name
+	session := c.Database().Session()
+	cacheKey := c.FullName() + "\x00" + keyInfo.name
 	if session.cluster().HasCachedIndex(cacheKey) {
 		return nil
 	}
 
 	spec := indexSpec{
 		Name:                    keyInfo.name,
-		NS:                      c.FullName,
+		NS:                      c.FullName(),
 		Key:                     keyInfo.key,
 		Unique:                  index.Unique,
 		DropDups:                index.DropDups,
@@ -1746,10 +1760,10 @@ NextField:
 	defer cloned.Close()
 	cloned.SetMode(Strong, false)
 	cloned.EnsureSafe(&Safe{})
-	db := c.Database.With(cloned)
+	db := c.Database().With(cloned)
 
 	// Try with a command first.
-	err = db.Run(bson.D{{Name: "createIndexes", Value: c.Name}, {Name: "indexes", Value: []indexSpec{spec}}}, nil)
+	err = db.Run(bson.D{{Name: "createIndexes", Value: c.Name()}, {Name: "indexes", Value: []indexSpec{spec}}}, nil)
 	if isNoCmd(err) {
 		// Command not yet supported. Insert into the indexes collection instead.
 		err = db.C("system.indexes").Insert(&spec)
@@ -1769,26 +1783,26 @@ NextField:
 //     err1 := collection.DropIndex("firstField", "-secondField")
 //     err2 := collection.DropIndex("customIndexName")
 //
-func (c *Collection) DropIndex(key ...string) error {
+func (c *collectionImpl) DropIndex(key ...string) error {
 	keyInfo, err := parseIndexKey(key)
 	if err != nil {
 		return err
 	}
 
-	session := c.Database.Session
-	cacheKey := c.FullName + "\x00" + keyInfo.name
+	session := c.Database().Session()
+	cacheKey := c.FullName() + "\x00" + keyInfo.name
 	session.cluster().CacheIndex(cacheKey, false)
 
 	session = session.Clone()
 	defer session.Close()
 	session.SetMode(Strong, false)
 
-	db := c.Database.With(session)
+	db := c.Database().With(session)
 	result := struct {
 		ErrMsg string
 		Ok     bool
 	}{}
-	err = db.Run(bson.D{{Name: "dropIndexes", Value: c.Name}, {Name: "index", Value: keyInfo.name}}, &result)
+	err = db.Run(bson.D{{Name: "dropIndexes", Value: c.Name()}, {Name: "index", Value: keyInfo.name}}, &result)
 	if err != nil {
 		return err
 	}
@@ -1804,14 +1818,14 @@ func (c *Collection) DropIndex(key ...string) error {
 //
 //     err := collection.DropIndex("customIndexName")
 //
-func (c *Collection) DropIndexName(name string) error {
-	session := c.Database.Session
+func (c *collectionImpl) DropIndexName(name string) error {
+	session := c.Database().Session()
 
 	session = session.Clone()
 	defer session.Close()
 	session.SetMode(Strong, false)
 
-	c = c.With(session)
+	c = c.With(session).(*collectionImpl)
 
 	indexes, err := c.Indexes()
 	if err != nil {
@@ -1832,7 +1846,7 @@ func (c *Collection) DropIndexName(name string) error {
 			return err
 		}
 
-		cacheKey := c.FullName + "\x00" + keyInfo.name
+		cacheKey := c.FullName() + "\x00" + keyInfo.name
 		session.cluster().CacheIndex(cacheKey, false)
 	}
 
@@ -1840,7 +1854,7 @@ func (c *Collection) DropIndexName(name string) error {
 		ErrMsg string
 		Ok     bool
 	}{}
-	err = c.Database.Run(bson.D{{Name: "dropIndexes", Value: c.Name}, {Name: "index", Value: name}}, &result)
+	err = c.Database().Run(bson.D{{Name: "dropIndexes", Value: c.Name()}, {Name: "index", Value: name}}, &result)
 	if err != nil {
 		return err
 	}
@@ -1851,19 +1865,19 @@ func (c *Collection) DropIndexName(name string) error {
 }
 
 // DropAllIndexes drops all the indexes from the c collection
-func (c *Collection) DropAllIndexes() error {
-	session := c.Database.Session
+func (c *collectionImpl) DropAllIndexes() error {
+	session := c.Database().Session()
 	session.ResetIndexCache()
 
 	session = session.Clone()
 	defer session.Close()
 
-	db := c.Database.With(session)
+	db := c.Database().With(session)
 	result := struct {
 		ErrMsg string
 		Ok     bool
 	}{}
-	err := db.Run(bson.D{{Name: "dropIndexes", Value: c.Name}, {Name: "index", Value: "*"}}, &result)
+	err := db.Run(bson.D{{Name: "dropIndexes", Value: c.Name()}, {Name: "index", Value: "*"}}, &result)
 	if err != nil {
 		return err
 	}
@@ -1887,8 +1901,8 @@ func (s *Session) nonEventual() *Session {
 // Indexes returns a list of all indexes for the collection.
 //
 // See the EnsureIndex method for more details on indexes.
-func (c *Collection) Indexes() (indexes []Index, err error) {
-	cloned := c.Database.Session.nonEventual()
+func (c *collectionImpl) Indexes() (indexes []Index, err error) {
+	cloned := c.Database().Session().nonEventual()
 	defer cloned.Close()
 
 	batchSize := int(cloned.queryConfig.op.limit)
@@ -1899,7 +1913,7 @@ func (c *Collection) Indexes() (indexes []Index, err error) {
 		Cursor  cursorData
 	}
 	var iter *Iter
-	err = c.Database.With(cloned).Run(bson.D{{Name: "listIndexes", Value: c.Name}, {Name: "cursor", Value: bson.D{{Name: "batchSize", Value: batchSize}}}}, &result)
+	err = c.Database().With(cloned).Run(bson.D{{Name: "listIndexes", Value: c.Name()}, {Name: "cursor", Value: bson.D{{Name: "batchSize", Value: batchSize}}}}, &result)
 	if err == nil {
 		firstBatch := result.Indexes
 		if firstBatch == nil {
@@ -1913,7 +1927,7 @@ func (c *Collection) Indexes() (indexes []Index, err error) {
 		}
 	} else if isNoCmd(err) {
 		// Command not yet supported. Query the database instead.
-		iter = c.Database.C("system.indexes").Find(bson.M{"ns": c.FullName}).Iter()
+		iter = c.Database().C("system.indexes").Find(bson.M{"ns": c.FullName()}).Iter()
 	} else {
 		return nil, err
 	}
@@ -2478,7 +2492,7 @@ func (s *Session) ensureSafe(safe *Safe) {
 //     db.Run(bson.D{{"create", "mycollection"}, {"size", 1024}})
 //
 // For commands on arbitrary databases, see the Run method in
-// the Database type.
+// the database type.
 //
 // Relevant documentation:
 //
@@ -2592,13 +2606,13 @@ func (s *Session) FsyncUnlock() error {
 //     http://www.mongodb.org/display/DOCS/Querying
 //     http://www.mongodb.org/display/DOCS/Advanced+Queries
 //
-func (c *Collection) Find(query interface{}) *Query {
-	session := c.Database.Session
+func (c *collectionImpl) Find(query interface{}) *Query {
+	session := c.Database().Session()
 	session.m.RLock()
 	q := &Query{session: session, query: session.queryConfig}
 	session.m.RUnlock()
 	q.op.query = query
-	q.op.collection = c.FullName
+	q.op.collection = c.FullName()
 	return q
 }
 
@@ -2617,11 +2631,11 @@ type repairCmdCursor struct {
 // by the iterator.
 //
 // Repair is supported in MongoDB 2.7.8 and later.
-func (c *Collection) Repair() *Iter {
+func (c *collectionImpl) Repair() *Iter {
 	// Clone session and set it to Monotonic mode so that the server
 	// used for the query may be safely obtained afterwards, if
 	// necessary for iteration when a cursor is received.
-	session := c.Database.Session
+	session := c.Database().Session()
 	cloned := session.nonEventual()
 	defer cloned.Close()
 
@@ -2630,12 +2644,12 @@ func (c *Collection) Repair() *Iter {
 	var result struct{ Cursor cursorData }
 
 	cmd := repairCmd{
-		RepairCursor: c.Name,
+		RepairCursor: c.Name(),
 		Cursor:       &repairCmdCursor{batchSize},
 	}
 
 	clonedc := c.With(cloned)
-	err := clonedc.Database.Run(cmd, &result)
+	err := clonedc.Database().Run(cmd, &result)
 	return clonedc.NewIter(session, result.Cursor.FirstBatch, result.Cursor.Id, err)
 }
 
@@ -2644,7 +2658,7 @@ func (c *Collection) Repair() *Iter {
 //     query := collection.Find(bson.M{"_id": id})
 //
 // See the Find method for more details.
-func (c *Collection) FindId(id interface{}) *Query {
+func (c *collectionImpl) FindId(id interface{}) *Query {
 	return c.Find(bson.D{{Name: "_id", Value: id}})
 }
 
@@ -2652,7 +2666,7 @@ func (c *Collection) FindId(id interface{}) *Query {
 // collection.
 type Pipe struct {
 	session    *Session
-	collection *Collection
+	collection *collectionImpl
 	pipeline   interface{}
 	allowDisk  bool
 	batchSize  int
@@ -2689,8 +2703,8 @@ type pipeCmdCursor struct {
 //     http://docs.mongodb.org/manual/tutorial/aggregation-examples
 //
 
-func (c *Collection) Pipe(pipeline interface{}) *Pipe {
-	session := c.Database.Session
+func (c *collectionImpl) Pipe(pipeline interface{}) *Pipe {
+	session := c.Database().Session()
 	session.m.RLock()
 	batchSize := int(session.queryConfig.op.limit)
 	session.m.RUnlock()
@@ -2718,7 +2732,7 @@ func (p *Pipe) Iter() *Iter {
 	}
 
 	cmd := pipeCmd{
-		Aggregate: c.Name,
+		Aggregate: c.Name(),
 		Pipeline:  p.pipeline,
 		AllowDisk: p.allowDisk,
 		Cursor:    &pipeCmdCursor{p.batchSize},
@@ -2727,11 +2741,11 @@ func (p *Pipe) Iter() *Iter {
 	if p.maxTimeMS > 0 {
 		cmd.MaxTimeMS = p.maxTimeMS
 	}
-	err := c.Database.Run(cmd, &result)
+	err := c.Database().Run(cmd, &result)
 	if e, ok := err.(*QueryError); ok && e.Message == `unrecognized field "cursor` {
 		cmd.Cursor = nil
 		cmd.AllowDisk = false
-		err = c.Database.Run(cmd, &result)
+		err = c.Database().Run(cmd, &result)
 	}
 	firstBatch := result.Result
 	if firstBatch == nil {
@@ -2769,9 +2783,9 @@ func (p *Pipe) Iter() *Iter {
 // When using MongoDB 3.2+ NewIter supports re-using an existing cursor on the
 // server. Ensure the connection has been established (i.e. by calling
 // session.Ping()) before calling NewIter.
-func (c *Collection) NewIter(session *Session, firstBatch []bson.Raw, cursorId int64, err error) *Iter {
+func (c *collectionImpl) NewIter(session *Session, firstBatch []bson.Raw, cursorId int64, err error) *Iter {
 	var server *mongoServer
-	csession := c.Database.Session
+	csession := c.Database().Session()
 	csession.m.RLock()
 	socket := csession.masterSocket
 	if socket == nil {
@@ -2802,7 +2816,7 @@ func (c *Collection) NewIter(session *Session, firstBatch []bson.Raw, cursorId i
 		err:     err,
 	}
 
-	if socket.ServerInfo().MaxWireVersion >= 4 && c.FullName != "admin.$cmd" {
+	if socket.ServerInfo().MaxWireVersion >= 4 && c.FullName() != "admin.$cmd" {
 		iter.isFindCmd = true
 	}
 
@@ -2815,7 +2829,7 @@ func (c *Collection) NewIter(session *Session, firstBatch []bson.Raw, cursorId i
 			iter.docsBeforeMore = len(firstBatch)
 		}
 		iter.op.cursorId = cursorId
-		iter.op.collection = c.FullName
+		iter.op.collection = c.FullName()
 		iter.op.replyFunc = iter.replyFunc()
 	}
 	return iter
@@ -2880,12 +2894,12 @@ func (p *Pipe) One(result interface{}) error {
 func (p *Pipe) Explain(result interface{}) error {
 	c := p.collection
 	cmd := pipeCmd{
-		Aggregate: c.Name,
+		Aggregate: c.Name(),
 		Pipeline:  p.pipeline,
 		AllowDisk: p.allowDisk,
 		Explain:   true,
 	}
-	return c.Database.Run(cmd, result)
+	return c.Database().Run(cmd, result)
 }
 
 // AllowDiskUse enables writing to the "<dbpath>/_tmp" server directory so
@@ -2996,8 +3010,8 @@ func IsDup(err error) bool {
 // case the session is in safe mode (see the SetSafe method) and an error
 // happens while inserting the provided documents, the returned error will
 // be of type *LastError.
-func (c *Collection) Insert(docs ...interface{}) error {
-	_, err := c.writeOp(&insertOp{c.FullName, docs, 0}, true)
+func (c *collectionImpl) Insert(docs ...interface{}) error {
+	_, err := c.writeOp(&insertOp{c.FullName(), docs, 0}, true)
 	return err
 }
 
@@ -3012,12 +3026,12 @@ func (c *Collection) Insert(docs ...interface{}) error {
 //     http://www.mongodb.org/display/DOCS/Updating
 //     http://www.mongodb.org/display/DOCS/Atomic+Operations
 //
-func (c *Collection) Update(selector interface{}, update interface{}) error {
+func (c *collectionImpl) Update(selector interface{}, update interface{}) error {
 	if selector == nil {
 		selector = bson.D{}
 	}
 	op := updateOp{
-		Collection: c.FullName,
+		Collection: c.FullName(),
 		Selector:   selector,
 		Update:     update,
 	}
@@ -3033,7 +3047,7 @@ func (c *Collection) Update(selector interface{}, update interface{}) error {
 //     err := collection.Update(bson.M{"_id": id}, update)
 //
 // See the Update method for more details.
-func (c *Collection) UpdateId(id interface{}, update interface{}) error {
+func (c *collectionImpl) UpdateId(id interface{}, update interface{}) error {
 	return c.Update(bson.D{{Name: "_id", Value: id}}, update)
 }
 
@@ -3060,12 +3074,12 @@ type ChangeInfo struct {
 //     http://www.mongodb.org/display/DOCS/Updating
 //     http://www.mongodb.org/display/DOCS/Atomic+Operations
 //
-func (c *Collection) UpdateAll(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
+func (c *collectionImpl) UpdateAll(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
 	if selector == nil {
 		selector = bson.D{}
 	}
 	op := updateOp{
-		Collection: c.FullName,
+		Collection: c.FullName(),
 		Selector:   selector,
 		Update:     update,
 		Flags:      2,
@@ -3091,12 +3105,12 @@ func (c *Collection) UpdateAll(selector interface{}, update interface{}) (info *
 //     http://www.mongodb.org/display/DOCS/Updating
 //     http://www.mongodb.org/display/DOCS/Atomic+Operations
 //
-func (c *Collection) Upsert(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
+func (c *collectionImpl) Upsert(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
 	if selector == nil {
 		selector = bson.D{}
 	}
 	op := updateOp{
-		Collection: c.FullName,
+		Collection: c.FullName(),
 		Selector:   selector,
 		Update:     update,
 		Flags:      1,
@@ -3128,7 +3142,7 @@ func (c *Collection) Upsert(selector interface{}, update interface{}) (info *Cha
 //     info, err := collection.Upsert(bson.M{"_id": id}, update)
 //
 // See the Upsert method for more details.
-func (c *Collection) UpsertId(id interface{}, update interface{}) (info *ChangeInfo, err error) {
+func (c *collectionImpl) UpsertId(id interface{}, update interface{}) (info *ChangeInfo, err error) {
 	return c.Upsert(bson.D{{Name: "_id", Value: id}}, update)
 }
 
@@ -3142,11 +3156,11 @@ func (c *Collection) UpsertId(id interface{}, update interface{}) (info *ChangeI
 //
 //     http://www.mongodb.org/display/DOCS/Removing
 //
-func (c *Collection) Remove(selector interface{}) error {
+func (c *collectionImpl) Remove(selector interface{}) error {
 	if selector == nil {
 		selector = bson.D{}
 	}
-	lerr, err := c.writeOp(&deleteOp{c.FullName, selector, 1, 1}, true)
+	lerr, err := c.writeOp(&deleteOp{c.FullName(), selector, 1, 1}, true)
 	if err == nil && lerr != nil && lerr.N == 0 {
 		return ErrNotFound
 	}
@@ -3158,7 +3172,7 @@ func (c *Collection) Remove(selector interface{}) error {
 //     err := collection.Remove(bson.M{"_id": id})
 //
 // See the Remove method for more details.
-func (c *Collection) RemoveId(id interface{}) error {
+func (c *collectionImpl) RemoveId(id interface{}) error {
 	return c.Remove(bson.D{{Name: "_id", Value: id}})
 }
 
@@ -3171,11 +3185,11 @@ func (c *Collection) RemoveId(id interface{}) error {
 //
 //     http://www.mongodb.org/display/DOCS/Removing
 //
-func (c *Collection) RemoveAll(selector interface{}) (info *ChangeInfo, err error) {
+func (c *collectionImpl) RemoveAll(selector interface{}) (info *ChangeInfo, err error) {
 	if selector == nil {
 		selector = bson.D{}
 	}
-	lerr, err := c.writeOp(&deleteOp{c.FullName, selector, 0, 0}, true)
+	lerr, err := c.writeOp(&deleteOp{c.FullName(), selector, 0, 0}, true)
 	if err == nil && lerr != nil {
 		info = &ChangeInfo{Removed: lerr.N, Matched: lerr.N}
 	}
@@ -3183,13 +3197,13 @@ func (c *Collection) RemoveAll(selector interface{}) (info *ChangeInfo, err erro
 }
 
 // DropDatabase removes the entire database including all of its collections.
-func (db *Database) DropDatabase() error {
+func (db *database) DropDatabase() error {
 	return db.Run(bson.D{{Name: "dropDatabase", Value: 1}}, nil)
 }
 
 // DropCollection removes the entire collection including all of its documents.
-func (c *Collection) DropCollection() error {
-	return c.Database.Run(bson.D{{Name: "drop", Value: c.Name}}, nil)
+func (c *collectionImpl) DropCollection() error {
+	return c.Database().Run(bson.D{{Name: "drop", Value: c.Name()}}, nil)
 }
 
 // The CollectionInfo type holds metadata about a collection.
@@ -3255,9 +3269,9 @@ type CollectionInfo struct {
 //     http://www.mongodb.org/display/DOCS/createCollection+Command
 //     http://www.mongodb.org/display/DOCS/Capped+Collections
 //
-func (c *Collection) Create(info *CollectionInfo) error {
+func (c *collectionImpl) Create(info *CollectionInfo) error {
 	cmd := make(bson.D, 0, 4)
-	cmd = append(cmd, bson.DocElem{Name: "create", Value: c.Name})
+	cmd = append(cmd, bson.DocElem{Name: "create", Value: c.Name()})
 	if info.Capped {
 		if info.MaxBytes < 1 {
 			return fmt.Errorf("Collection.Create: with Capped, MaxBytes must also be set")
@@ -3290,7 +3304,7 @@ func (c *Collection) Create(info *CollectionInfo) error {
 		cmd = append(cmd, bson.DocElem{Name: "collation", Value: info.Collation})
 	}
 
-	return c.Database.Run(cmd, nil)
+	return c.Database().Run(cmd, nil)
 }
 
 // Batch sets the batch size used when fetching documents from the database.
@@ -3854,21 +3868,21 @@ type getMoreCmd struct {
 }
 
 // run duplicates the behavior of collection.Find(query).One(&result)
-// as performed by Database.Run, specializing the logic for running
+// as performed by database.Run, specializing the logic for running
 // database commands on a given socket.
-func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (err error) {
-	// Database.Run:
+func (db *database) run(socket *mongoSocket, cmd, result interface{}) (err error) {
+	// database.Run:
 	if name, ok := cmd.(string); ok {
 		cmd = bson.D{{Name: name, Value: 1}}
 	}
 
 	// Collection.Find:
-	session := db.Session
+	session := db.Session()
 	session.m.RLock()
 	op := session.queryConfig.op // Copy.
 	session.m.RUnlock()
 	op.query = cmd
-	op.collection = db.Name + ".$cmd"
+	op.collection = db.Name() + ".$cmd"
 
 	// Query.One:
 	session.prepareQuery(&op)
@@ -3884,7 +3898,7 @@ func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (err error
 	if result != nil {
 		err = bson.Unmarshal(data, result)
 		if err != nil {
-			debugf("Run command unmarshaling failed: %#v", op, err)
+			debugf("Run command unmarshaling failed: %#v", err)
 			return err
 		}
 		if globalDebug && globalLogger != nil {
@@ -3902,7 +3916,7 @@ func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (err error
 // a structure which includes a collection name, a document id, and
 // optionally a database name.
 //
-// See the FindRef methods on Session and on Database.
+// See the FindRef methods on Session and on database.
 //
 // Relevant documentation:
 //
@@ -3926,12 +3940,12 @@ type DBRef struct {
 //
 //     http://www.mongodb.org/display/DOCS/Database+References
 //
-func (db *Database) FindRef(ref *DBRef) *Query {
-	var c *Collection
+func (db *database) FindRef(ref *DBRef) *Query {
+	var c Collection
 	if ref.Database == "" {
 		c = db.C(ref.Collection)
 	} else {
-		c = db.Session.DB(ref.Database).C(ref.Collection)
+		c = db.Session().DB(ref.Database).C(ref.Collection)
 	}
 	return c.FindId(ref.Id)
 }
@@ -3940,7 +3954,7 @@ func (db *Database) FindRef(ref *DBRef) *Query {
 // reference. For a DBRef to be resolved correctly at the session level
 // it must necessarily have the optional DB field defined.
 //
-// See also the DBRef type and the FindRef method on Database.
+// See also the DBRef type and the FindRef method on database.
 //
 // Relevant documentation:
 //
@@ -3955,11 +3969,11 @@ func (s *Session) FindRef(ref *DBRef) *Query {
 }
 
 // CollectionNames returns the collection names present in the db database.
-func (db *Database) CollectionNames() (names []string, err error) {
+func (db *database) CollectionNames() (names []string, err error) {
 	// Clone session and set it to Monotonic mode so that the server
 	// used for the query may be safely obtained afterwards, if
 	// necessary for iteration when a cursor is received.
-	cloned := db.Session.nonEventual()
+	cloned := db.session.nonEventual()
 	defer cloned.Close()
 
 	batchSize := int(cloned.queryConfig.op.limit)
@@ -3997,7 +4011,7 @@ func (db *Database) CollectionNames() (names []string, err error) {
 	}
 
 	// Command not yet supported. Query the database instead.
-	nameIndex := len(db.Name) + 1
+	nameIndex := len(db.Name()) + 1
 	iter := db.C("system.namespaces").Find(nil).Iter()
 	var coll struct{ Name string }
 	for iter.Next(&coll) {
@@ -4632,7 +4646,7 @@ func (q *Query) Count() (n int, err error) {
 }
 
 // Count returns the total number of documents in the collection.
-func (c *Collection) Count() (n int, err error) {
+func (c *collectionImpl) Count() (n int, err error) {
 	return c.Find(nil).Count()
 }
 
@@ -5306,9 +5320,9 @@ func (r *writeCmdResult) BulkErrorCases() []BulkErrorCase {
 // by a getLastError command in case the session is in safe mode.  The
 // LastError result is made available in lerr, and if lerr.Err is set it
 // will also be returned as err.
-func (c *Collection) writeOp(op interface{}, ordered bool) (lerr *LastError, err error) {
-	s := c.Database.Session
-	socket, err := s.acquireSocket(c.Database.Name == "local")
+func (c *collectionImpl) writeOp(op interface{}, ordered bool) (lerr *LastError, err error) {
+	s := c.Database().Session()
+	socket, err := s.acquireSocket(c.Database().Name() == "local")
 	if err != nil {
 		return nil, err
 	}
@@ -5441,7 +5455,7 @@ func (c *Collection) writeOp(op interface{}, ordered bool) (lerr *LastError, err
 	return c.writeOpQuery(socket, safeOp, op, ordered)
 }
 
-func (c *Collection) writeOpQuery(socket *mongoSocket, safeOp *queryOp, op interface{}, ordered bool) (lerr *LastError, err error) {
+func (c *collectionImpl) writeOpQuery(socket *mongoSocket, safeOp *queryOp, op interface{}, ordered bool) (lerr *LastError, err error) {
 	if safeOp == nil {
 		return nil, socket.Query(op)
 	}
@@ -5451,7 +5465,7 @@ func (c *Collection) writeOpQuery(socket *mongoSocket, safeOp *queryOp, op inter
 	var replyErr error
 	mutex.Lock()
 	query := *safeOp // Copy the data.
-	query.collection = c.Database.Name + ".$cmd"
+	query.collection = c.Database().Name() + ".$cmd"
 	query.replyFunc = func(err error, reply *replyOp, docNum int, docData []byte) {
 		replyData = docData
 		replyErr = err
@@ -5487,7 +5501,7 @@ func (c *Collection) writeOpQuery(socket *mongoSocket, safeOp *queryOp, op inter
 	return result, nil
 }
 
-func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op interface{}, ordered, bypassValidation bool) (lerr *LastError, err error) {
+func (c *collectionImpl) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op interface{}, ordered, bypassValidation bool) (lerr *LastError, err error) {
 	var writeConcern interface{}
 	if safeOp == nil {
 		writeConcern = bson.D{{Name: "w", Value: 0}}
@@ -5500,7 +5514,7 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	case *insertOp:
 		// http://docs.mongodb.org/manual/reference/command/insert
 		cmd = bson.D{
-			{Name: "insert", Value: c.Name},
+			{Name: "insert", Value: c.Name()},
 			{Name: "documents", Value: op.documents},
 			{Name: "writeConcern", Value: writeConcern},
 			{Name: "ordered", Value: op.flags&1 == 0},
@@ -5508,7 +5522,7 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	case *updateOp:
 		// http://docs.mongodb.org/manual/reference/command/update
 		cmd = bson.D{
-			{Name: "update", Value: c.Name},
+			{Name: "update", Value: c.Name()},
 			{Name: "updates", Value: []interface{}{op}},
 			{Name: "writeConcern", Value: writeConcern},
 			{Name: "ordered", Value: ordered},
@@ -5516,7 +5530,7 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	case bulkUpdateOp:
 		// http://docs.mongodb.org/manual/reference/command/update
 		cmd = bson.D{
-			{Name: "update", Value: c.Name},
+			{Name: "update", Value: c.Name()},
 			{Name: "updates", Value: op},
 			{Name: "writeConcern", Value: writeConcern},
 			{Name: "ordered", Value: ordered},
@@ -5524,7 +5538,7 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	case *deleteOp:
 		// http://docs.mongodb.org/manual/reference/command/delete
 		cmd = bson.D{
-			{Name: "delete", Value: c.Name},
+			{Name: "delete", Value: c.Name()},
 			{Name: "deletes", Value: []interface{}{op}},
 			{Name: "writeConcern", Value: writeConcern},
 			{Name: "ordered", Value: ordered},
@@ -5532,7 +5546,7 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	case bulkDeleteOp:
 		// http://docs.mongodb.org/manual/reference/command/delete
 		cmd = bson.D{
-			{Name: "delete", Value: c.Name},
+			{Name: "delete", Value: c.Name()},
 			{Name: "deletes", Value: op},
 			{Name: "writeConcern", Value: writeConcern},
 			{Name: "ordered", Value: ordered},
@@ -5543,7 +5557,7 @@ func (c *Collection) writeOpCommand(socket *mongoSocket, safeOp *queryOp, op int
 	}
 
 	var result writeCmdResult
-	err = c.Database.run(socket, cmd, &result)
+	err = c.Database().(*database).run(socket, cmd, &result)
 	debugf("Write command result: %#v (err=%v)", result, err)
 	ecases := result.BulkErrorCases()
 	lerr = &LastError{

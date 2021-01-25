@@ -545,7 +545,7 @@ func (s *S) TestFindRef(c *C) {
 	c.Assert(result.N, Equals, 3)
 
 	f := func() { session.FindRef(ref1).One(&result) }
-	c.Assert(f, PanicMatches, "Can't resolve database for &mgo.DBRef{Collection:\"col1\", Id:1, Database:\"\"}")
+	c.Assert(f, PanicMatches, "Can't resolve database for &mgo.DBRef{Collection:\"col1\", Id:1, database:\"\"}")
 }
 
 func (s *S) TestDatabaseAndCollectionNames(c *C) {
@@ -1503,7 +1503,7 @@ func (s *S) TestView(c *C) {
 
 	pipeline := []bson.M{{"$match": bson.M{"_id": bson.M{"$gte": 2}}}}
 
-	err = db.CreateView("myview", coll.Name, pipeline, nil)
+	err = db.CreateView("myview", coll.Name(), pipeline, nil)
 	c.Assert(err, IsNil)
 
 	names, err := db.CollectionNames()
@@ -5009,7 +5009,7 @@ func (s *S) TestBypassValidation(c *C) {
 	err = coll.Insert(M{"n": 1})
 	c.Assert(err, IsNil)
 
-	err = coll.Database.Run(bson.D{
+	err = coll.Database().Run(bson.D{
 		{Name: "collMod", Value: "mycoll"},
 		{Name: "validator", Value: M{"s": M{"$type": "string"}}},
 	}, nil)

@@ -60,8 +60,8 @@ import (
 //    https://docs.mongodb.com/manual/core/gridfs/#gridfs-files-collection
 //
 type GridFS struct {
-	Files  *Collection
-	Chunks *Collection
+	Files  *collectionImpl
+	Chunks *collectionImpl
 }
 
 type gfsFileMode int
@@ -118,8 +118,8 @@ type gfsCachedChunk struct {
 	err  error
 }
 
-func newGridFS(db *Database, prefix string) *GridFS {
-	return &GridFS{db.C(prefix + ".files"), db.C(prefix + ".chunks")}
+func newGridFS(db *database, prefix string) *GridFS {
+	return &GridFS{db.C(prefix + ".files").(*collectionImpl), db.C(prefix + ".chunks").(*collectionImpl)}
 }
 
 func (gfs *GridFS) newFile() *GridFile {
@@ -678,7 +678,7 @@ func (file *GridFile) insertChunk(data []byte) {
 // an error, if any.
 func (file *GridFile) Seek(offset int64, whence int) (pos int64, err error) {
 	file.m.Lock()
-	debugf("GridFile %p: seeking for %s (whence=%d)", file, offset, whence)
+	debugf("GridFile %p: seeking for %d (whence=%d)", file, offset, whence)
 	defer file.m.Unlock()
 	switch whence {
 	case os.SEEK_SET:
@@ -766,10 +766,10 @@ func (file *GridFile) getChunk() (data []byte, err error) {
 		debugf("GridFile %p: Scheduling chunk %d for background caching", file, file.chunk)
 		// Clone the session to avoid having it closed in between.
 		chunks := file.gfs.Chunks
-		session := chunks.Database.Session.Clone()
+		session := chunks.Database().Session().Clone()
 		go func(id interface{}, n int) {
 			defer session.Close()
-			chunks = chunks.With(session)
+			chunks = chunks.With(session).(*collectionImpl)
 			var doc gfsChunk
 			cache.err = chunks.Find(bson.D{{Name: "files_id", Value: id}, {Name: "n", Value: n}}).One(&doc)
 			cache.data = doc.Data

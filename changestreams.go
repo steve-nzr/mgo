@@ -23,7 +23,7 @@ type ChangeStream struct {
 	options        ChangeStreamOptions
 	pipeline       interface{}
 	resumeToken    *bson.Raw
-	collection     *Collection
+	collection     *collectionImpl
 	readPreference *ReadPreference
 	err            error
 	m              sync.Mutex
@@ -54,7 +54,7 @@ var errMissingResumeToken = errors.New("resume token missing from result")
 
 // Watch constructs a new ChangeStream capable of receiving continuing data
 // from the database.
-func (coll *Collection) Watch(pipeline interface{},
+func (c *collectionImpl) Watch(pipeline interface{},
 	options ChangeStreamOptions) (*ChangeStream, error) {
 
 	if pipeline == nil {
@@ -62,7 +62,7 @@ func (coll *Collection) Watch(pipeline interface{},
 	}
 
 	csPipe := constructChangeStreamPipeline(pipeline, options)
-	pipe := coll.Pipe(&csPipe)
+	pipe := c.Pipe(&csPipe)
 	if options.MaxAwaitTimeMS > 0 {
 		pipe.SetMaxTime(options.MaxAwaitTimeMS)
 	}
@@ -81,7 +81,7 @@ func (coll *Collection) Watch(pipeline interface{},
 	pIter.isChangeStream = true
 	return &ChangeStream{
 		iter:        pIter,
-		collection:  coll,
+		collection:  c,
 		resumeToken: nil,
 		options:     options,
 		pipeline:    pipeline,
@@ -264,9 +264,9 @@ func (changeStream *ChangeStream) resume() error {
 
 	// change out the old connection to the database with the new connection.
 	if changeStream.sessionCopied {
-		changeStream.collection.Database.Session.Close()
+		changeStream.collection.Database().Session().Close()
 	}
-	changeStream.collection.Database.Session = newSession
+	changeStream.collection.Database().(*database).session = newSession
 	changeStream.sessionCopied = true
 
 	opts := changeStream.options

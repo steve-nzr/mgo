@@ -23,7 +23,7 @@ import (
 //   http://blog.mongodb.org/post/84922794768/mongodbs-new-bulk-api
 //
 type Bulk struct {
-	c       *Collection
+	c       *collectionImpl
 	opcount int
 	actions []bulkAction
 	ordered bool
@@ -129,7 +129,7 @@ var actionPool = sync.Pool{
 }
 
 // Bulk returns a value to prepare the execution of a bulk operation.
-func (c *Collection) Bulk() *Bulk {
+func (c *collectionImpl) Bulk() *Bulk {
 	return &Bulk{c: c, ordered: true}
 }
 
@@ -182,7 +182,7 @@ func (b *Bulk) Remove(selectors ...interface{}) {
 			selector = bson.D{}
 		}
 		action.docs = append(action.docs, &deleteOp{
-			Collection: b.c.FullName,
+			Collection: b.c.FullName(),
 			Selector:   selector,
 			Flags:      1,
 			Limit:      1,
@@ -199,7 +199,7 @@ func (b *Bulk) RemoveAll(selectors ...interface{}) {
 			selector = bson.D{}
 		}
 		action.docs = append(action.docs, &deleteOp{
-			Collection: b.c.FullName,
+			Collection: b.c.FullName(),
 			Selector:   selector,
 			Flags:      0,
 			Limit:      0,
@@ -222,7 +222,7 @@ func (b *Bulk) Update(pairs ...interface{}) {
 			selector = bson.D{}
 		}
 		action.docs = append(action.docs, &updateOp{
-			Collection: b.c.FullName,
+			Collection: b.c.FullName(),
 			Selector:   selector,
 			Update:     pairs[i+1],
 		})
@@ -244,7 +244,7 @@ func (b *Bulk) UpdateAll(pairs ...interface{}) {
 			selector = bson.D{}
 		}
 		action.docs = append(action.docs, &updateOp{
-			Collection: b.c.FullName,
+			Collection: b.c.FullName(),
 			Selector:   selector,
 			Update:     pairs[i+1],
 			Flags:      2,
@@ -268,7 +268,7 @@ func (b *Bulk) Upsert(pairs ...interface{}) {
 			selector = bson.D{}
 		}
 		action.docs = append(action.docs, &updateOp{
-			Collection: b.c.FullName,
+			Collection: b.c.FullName(),
 			Selector:   selector,
 			Update:     pairs[i+1],
 			Flags:      1,
@@ -318,7 +318,7 @@ func (b *Bulk) Run() (*BulkResult, error) {
 }
 
 func (b *Bulk) runInsert(action *bulkAction, result *BulkResult, berr *BulkError) bool {
-	op := &insertOp{b.c.FullName, action.docs, 0}
+	op := &insertOp{b.c.FullName(), action.docs, 0}
 	if !b.ordered {
 		op.flags = 1 // ContinueOnError
 	}
